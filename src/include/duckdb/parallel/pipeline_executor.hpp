@@ -182,7 +182,7 @@ private:
 	idx_t trace_pending_rows = 0;
 
 private:
-	void StartOperator(PhysicalOperator &op);
+	void StartOperator(PhysicalOperator &op, OperatorProfilerRole role);
 	void EndOperator(PhysicalOperator &op, optional_ptr<DataChunk> chunk);
 
 	//! Reset the operator index to the first operator

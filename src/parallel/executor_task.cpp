@@ -78,7 +78,9 @@ TaskExecutionResult ExecutorTask::Execute(TaskExecutionMode mode) {
 			TaskExecutionResult result;
 			do {
 				TaskNotifier task_notifier {context};
-				thread_context->profiler.StartOperator(op);
+				// Tasks with their own thread context are the steps of an operator's finalize phase (a hash join
+				// building its table, an aggregate combining its partitions, a sink's Finalize): finalize time
+				thread_context->profiler.StartOperator(op, OperatorProfilerRole::FINALIZE);
 				// to allow continuous profiling, always execute in small steps
 				result = ExecuteTask(TaskExecutionMode::PROCESS_PARTIAL);
 				thread_context->profiler.EndOperator(nullptr);

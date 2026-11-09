@@ -196,7 +196,7 @@ bool PipelineExecutor::TryFlushCachingOperators(ExecutionBudget &chunk_budget) {
 
 		if (!resuming_push) {
 			curr_chunk.Reset();
-			StartOperator(current_operator);
+			StartOperator(current_operator, OperatorProfilerRole::EXECUTE);
 			auto finalize_result = current_operator.FinalExecute(context, curr_chunk, *current_operator.op_state,
 			                                                     *intermediate_states[flushing_idx]);
 			EndOperator(current_operator, &curr_chunk);
@@ -456,7 +456,7 @@ PipelineExecuteResult PipelineExecutor::PushExternal(DataChunk &input,
 		}
 	}
 	if (!remaining_sink_chunk && !next_batch_blocked) {
-		context.thread.profiler.StartOperator(pipeline.source.get());
+		context.thread.profiler.StartOperator(pipeline.source.get(), OperatorProfilerRole::SOURCE);
 		context.thread.profiler.EndOperator(&input);
 	}
 
@@ -590,7 +590,7 @@ OperatorResultType PipelineExecutor::ExecutePushInternal(DataChunk &input, Execu
 		}
 		auto &sink_chunk = final_chunk;
 		if (sink_chunk.size() > 0) {
-			StartOperator(*pipeline.sink);
+			StartOperator(*pipeline.sink, OperatorProfilerRole::SINK);
 			D_ASSERT(pipeline.sink);
 			D_ASSERT(pipeline.sink->sink_state);
 			OperatorSinkInput sink_input {*pipeline.sink->sink_state, *local_sink_state, interrupt_state};
@@ -701,7 +701,10 @@ PipelineExecuteResult PipelineExecutor::PushFinalize() {
 		return PipelineExecuteResult::INTERRUPTED;
 	}
 #endif
+	// Combine merges this thread's sink state into the global one, as part of the pipeline's execution: sink time
+	StartOperator(*pipeline.sink, OperatorProfilerRole::SINK);
 	auto result = pipeline.sink->Combine(context, combine_input);
+	EndOperator(*pipeline.sink, nullptr);
 
 	if (result == SinkCombineResultType::BLOCKED) {
 		return PipelineExecuteResult::INTERRUPTED;
@@ -778,7 +781,7 @@ OperatorResultType PipelineExecutor::Execute(DataChunk &input, DataChunk &result
 
 			// if current_idx > source_idx, we pass the previous operators' output through the Execute of the current
 			// operator
-			StartOperator(current_operator);
+			StartOperator(current_operator, OperatorProfilerRole::EXECUTE);
 			auto result = current_operator.Execute(context, prev_chunk, current_chunk, *current_operator.op_state,
 			                                       *intermediate_states[current_intermediate - 1]);
 			EndOperator(current_operator, &current_chunk);
@@ -878,7 +881,7 @@ PipelineExecutor::SourceFetchResult PipelineExecutor::FetchFromSource(DataChunk 
 	// the previous chunk has been pushed through the pipeline
 	SampleProgress();
 	FlushTraceCounters();
-	StartOperator(*pipeline.source);
+	StartOperator(*pipeline.source, OperatorProfilerRole::SOURCE);
 
 	OperatorSourceInput source_input = {*global_source_state, *local_source_state, interrupt_state};
 	SourceFetchResult fetch_result;
@@ -923,9 +926,9 @@ void PipelineExecutor::InitializeChunk(DataChunk &chunk) {
 	last_op.InitializeOutputChunk(BufferAllocator::Get(context.client), chunk);
 }
 
-void PipelineExecutor::StartOperator(PhysicalOperator &op) {
+void PipelineExecutor::StartOperator(PhysicalOperator &op, OperatorProfilerRole role) {
 	context.client.InterruptCheck();
-	context.thread.profiler.StartOperator(&op);
+	context.thread.profiler.StartOperator(&op, role);
 }
 
 void PipelineExecutor::EndOperator(PhysicalOperator &op, optional_ptr<DataChunk> chunk) {
