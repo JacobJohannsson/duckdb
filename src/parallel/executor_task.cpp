@@ -3,6 +3,11 @@
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/parallel/base_pipeline_event.hpp"
+#include "duckdb/parallel/pipeline.hpp"
+#include "duckdb/parallel/pipeline_initialize_event.hpp"
+#include "duckdb/parallel/pipeline_tracer.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 
 namespace duckdb {
 
@@ -14,6 +19,12 @@ ExecutorTask::ExecutorTask(Executor &executor_p, shared_ptr<Event> event_p)
 ExecutorTask::ExecutorTask(ClientContext &context_p, shared_ptr<Event> event_p, const PhysicalOperator &op_p)
     : executor(Executor::Get(context_p)), event(std::move(event_p)), op(&op_p), context(context_p) {
 	thread_context = make_uniq<ThreadContext>(context_p);
+	executor.RegisterTask();
+}
+
+ExecutorTask::ExecutorTask(Executor &executor_p, shared_ptr<Event> event_p, const PhysicalOperator &op_p)
+    : executor(executor_p), event(std::move(event_p)), op(&op_p), context(executor_p.context) {
+	thread_context = make_uniq<ThreadContext>(executor_p.context);
 	executor.RegisterTask();
 }
 
@@ -36,13 +47,46 @@ void ExecutorTask::Reschedule() {
 	executor.RescheduleTask(this_ptr);
 }
 
+namespace {
+//! Traces a task of a pipeline outside its execute phase: initializing the sink, or a finalize step.
+//! PipelineTask traces the execute phase itself.
+struct StageTaskTrace {
+	StageTaskTrace(ExecutorTask &task, const shared_ptr<Event> &event) {
+		if (!event || dynamic_cast<PipelineTask *>(&task)) {
+			return;
+		}
+		auto pipeline_event = dynamic_cast<BasePipelineEvent *>(event.get());
+		if (!pipeline_event || !pipeline_event->pipeline || !pipeline_event->pipeline->trace) {
+			return;
+		}
+		entry = pipeline_event->pipeline->trace.get();
+		initialize = dynamic_cast<PipelineInitializeEvent *>(event.get()) != nullptr;
+		tracer = TaskScheduler::GetScheduler(pipeline_event->pipeline->GetClientContext()).GetTracer();
+		start_ns = tracer->Now();
+		tracer->StageTaskStarted(*entry, initialize);
+	}
+	~StageTaskTrace() {
+		if (entry) {
+			tracer->StageTaskFinished(*entry, start_ns, initialize);
+		}
+	}
+	optional_ptr<PipelineTraceEntry> entry;
+	optional_ptr<PipelineTracer> tracer;
+	int64_t start_ns = 0;
+	bool initialize = false;
+};
+} // namespace
+
 TaskExecutionResult ExecutorTask::Execute(TaskExecutionMode mode) {
+	StageTaskTrace stage_trace(*this, event);
 	try {
 		if (thread_context) {
 			TaskExecutionResult result;
 			do {
 				TaskNotifier task_notifier {context};
-				thread_context->profiler.StartOperator(op);
+				// Tasks with their own thread context are the steps of an operator's finalize phase (a hash join
+				// building its table, an aggregate combining its partitions, a sink's Finalize): finalize time
+				thread_context->profiler.StartOperator(op, OperatorProfilerRole::FINALIZE);
 				// to allow continuous profiling, always execute in small steps
 				result = ExecuteTask(TaskExecutionMode::PROCESS_PARTIAL);
 				thread_context->profiler.EndOperator(nullptr);

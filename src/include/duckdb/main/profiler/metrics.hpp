@@ -191,12 +191,26 @@ struct MetricOperatorCPUTime {
 	static constexpr const char *Unit = "seconds";
 	static constexpr const char *TypeStr = "double";
 };
+struct MetricOperatorExecuteTiming {
+	using METRIC_TYPE = double;
+	static constexpr const char *Name = "operator.execute_timing";
+	static constexpr const char *Description = "Time spent in the operator as an intermediate operator of its pipeline (Execute, FinalExecute); part of timing";
+	static constexpr const char *Unit = "seconds";
+	static constexpr const char *TypeStr = "double";
+};
 struct MetricOperatorExtraInfo {
 	using METRIC_TYPE = Value;
 	static constexpr const char *Name = "operator.extra_info";
 	static constexpr const char *Description = "Unique operator metrics";
 	static constexpr const char *Unit = "";
 	static constexpr const char *TypeStr = "map";
+};
+struct MetricOperatorFinalizeTiming {
+	using METRIC_TYPE = double;
+	static constexpr const char *Name = "operator.finalize_timing";
+	static constexpr const char *Description = "Time spent in the operator's finalize phase (PrepareFinalize, Finalize and the tasks it schedules); part of timing";
+	static constexpr const char *Unit = "seconds";
+	static constexpr const char *TypeStr = "double";
 };
 struct MetricOperatorIntermediateRows {
 	using METRIC_TYPE = uint64_t;
@@ -225,6 +239,20 @@ struct MetricOperatorRowsScanned {
 	static constexpr const char *Description = "Number of rows scanned by the operator";
 	static constexpr const char *Unit = "rows";
 	static constexpr const char *TypeStr = "uint64";
+};
+struct MetricOperatorSinkTiming {
+	using METRIC_TYPE = double;
+	static constexpr const char *Name = "operator.sink_timing";
+	static constexpr const char *Description = "Time spent in the operator as its pipeline's sink (Sink, Combine); part of timing";
+	static constexpr const char *Unit = "seconds";
+	static constexpr const char *TypeStr = "double";
+};
+struct MetricOperatorSourceTiming {
+	using METRIC_TYPE = double;
+	static constexpr const char *Name = "operator.source_timing";
+	static constexpr const char *Description = "Time spent in the operator as its pipeline's source (GetData); part of timing";
+	static constexpr const char *Unit = "seconds";
+	static constexpr const char *TypeStr = "double";
 };
 struct MetricOperatorTiming {
 	using METRIC_TYPE = double;
