@@ -22,6 +22,12 @@ ExecutorTask::ExecutorTask(ClientContext &context_p, shared_ptr<Event> event_p, 
 	executor.RegisterTask();
 }
 
+ExecutorTask::ExecutorTask(Executor &executor_p, shared_ptr<Event> event_p, const PhysicalOperator &op_p)
+    : executor(executor_p), event(std::move(event_p)), op(&op_p), context(executor_p.context) {
+	thread_context = make_uniq<ThreadContext>(executor_p.context);
+	executor.RegisterTask();
+}
+
 ExecutorTask::~ExecutorTask() {
 	if (thread_context) {
 		executor.Flush(*thread_context);

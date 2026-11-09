@@ -11,8 +11,9 @@ namespace duckdb {
 //! in a task to allow the Finalize call to block (e.g. for async I/O)
 class PipelineFinishTask : public ExecutorTask {
 public:
+	//! Profiled as the sink's finalize time (ExecutorTask::Execute)
 	explicit PipelineFinishTask(Pipeline &pipeline_p, shared_ptr<Event> event_p)
-	    : ExecutorTask(pipeline_p.executor, std::move(event_p)), pipeline(pipeline_p) {
+	    : ExecutorTask(pipeline_p.executor, std::move(event_p), *pipeline_p.GetSink()), pipeline(pipeline_p) {
 	}
 
 	Pipeline &pipeline;
