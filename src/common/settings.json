@@ -302,7 +302,7 @@
     },
     {
         "name": "dbsched_scheduler_mode",
-        "description": "Thread-assignment hook for the progress simulator: off, deferred (threads change pipeline only at ticks), or immediate.",
+        "description": "Thread-assignment hook for the progress simulator: off, deferred (threads change pipeline only at ticks), immediate, or solo (one pipeline at a time).",
         "type": "VARCHAR",
         "scope": "global",
         "default_value": "off"
