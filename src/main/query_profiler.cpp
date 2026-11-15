@@ -420,7 +420,7 @@ OperatorProfiler::OperatorProfiler(ClientContext &context) : context(context) {
 	enabled = QueryProfiler::Get(context).IsEnabled();
 }
 
-void OperatorProfiler::StartOperator(optional_ptr<const PhysicalOperator> phys_op) {
+void OperatorProfiler::StartOperator(optional_ptr<const PhysicalOperator> phys_op, OperatorProfilerRole role) {
 	if (!enabled) {
 		return;
 	}
@@ -428,19 +428,35 @@ void OperatorProfiler::StartOperator(optional_ptr<const PhysicalOperator> phys_o
 		throw InternalException("OperatorProfiler: Attempting to call StartOperator while another operator is active");
 	}
 	active_operator = phys_op;
+	active_role = role;
 
 	if (!OperatorMetricsIsInitialized(*active_operator)) {
 		// first time calling into this operator - fetch the info
 		auto &info = GetOperatorMetrics(*active_operator);
-		info.SetExtraInfo(active_operator->ParamsToString());
+		info.SetExtraInfo(active_operator->ParamsToStringWithId());
 	}
 
 	// Start the timing of the current operator.
 	op.Start();
 }
 
-void OperatorMetrics::GatherMetrics(ClientContext &context, double elapsed_time, optional_ptr<DataChunk> chunk) {
+void OperatorMetrics::GatherMetrics(ClientContext &context, double elapsed_time, optional_ptr<DataChunk> chunk,
+                                    OperatorProfilerRole role) {
 	time += elapsed_time;
+	switch (role) {
+	case OperatorProfilerRole::SOURCE:
+		source_time += elapsed_time;
+		break;
+	case OperatorProfilerRole::EXECUTE:
+		execute_time += elapsed_time;
+		break;
+	case OperatorProfilerRole::SINK:
+		sink_time += elapsed_time;
+		break;
+	case OperatorProfilerRole::FINALIZE:
+		finalize_time += elapsed_time;
+		break;
+	}
 	if (chunk) {
 		elements_returned += chunk->size();
 		intermediate_size_bytes += LossyNumericCast<idx_t>(chunk->GetDataSize());
@@ -458,6 +474,10 @@ void OperatorMetrics::GatherMetrics(ClientContext &context, double elapsed_time,
 
 void OperatorMetrics::MergeInternal(const OperatorMetrics &other) {
 	time += other.time;
+	source_time += other.source_time;
+	execute_time += other.execute_time;
+	sink_time += other.sink_time;
+	finalize_time += other.finalize_time;
 	elements_returned += other.elements_returned;
 	intermediate_size_bytes += other.intermediate_size_bytes;
 	rows_scanned += other.rows_scanned;
@@ -490,7 +510,7 @@ void OperatorProfiler::EndOperator(optional_ptr<DataChunk> chunk) {
 
 	auto &info = GetOperatorMetrics(*active_operator);
 	op.End();
-	info.GatherMetrics(context, op.Elapsed(), chunk);
+	info.GatherMetrics(context, op.Elapsed(), chunk, active_role);
 	active_operator = nullptr;
 }
 
@@ -745,6 +765,18 @@ profiler_metrics_t OperatorMetrics::GetMetrics(const GatheredMetrics &info) cons
 	}
 	if (info.MetricIsTracked<MetricOperatorTiming>()) {
 		result["timing"] = Value::DOUBLE(time);
+	}
+	if (info.MetricIsTracked<MetricOperatorSourceTiming>()) {
+		result["source_timing"] = Value::DOUBLE(source_time);
+	}
+	if (info.MetricIsTracked<MetricOperatorExecuteTiming>()) {
+		result["execute_timing"] = Value::DOUBLE(execute_time);
+	}
+	if (info.MetricIsTracked<MetricOperatorSinkTiming>()) {
+		result["sink_timing"] = Value::DOUBLE(sink_time);
+	}
+	if (info.MetricIsTracked<MetricOperatorFinalizeTiming>()) {
+		result["finalize_timing"] = Value::DOUBLE(finalize_time);
 	}
 	if (info.MetricIsTracked<MetricOperatorIntermediateRows>()) {
 		result["intermediate_rows"] = Value::UBIGINT(elements_returned);
@@ -1050,7 +1082,7 @@ unique_ptr<ProfilingNode> QueryProfiler::CreateTree(const PhysicalOperator &root
 
 	info.name = EnumUtil::ToString(root_p.type);
 	info.operator_type = root_p.type;
-	auto params = root_p.ParamsToString();
+	auto params = root_p.ParamsToStringWithId();
 	info.SetExtraInfo(std::move(params));
 
 	tree_map.insert(make_pair(reference<const PhysicalOperator>(root_p), reference<ProfilingNode>(*node)));

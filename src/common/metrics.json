@@ -127,9 +127,19 @@
 			"description": "CPU time spent in the operator",
 			"unit": "seconds"
 		},
+		"execute_timing": {
+			"metric_type": "double",
+			"description": "Time spent in the operator as an intermediate operator of its pipeline (Execute, FinalExecute); part of timing",
+			"unit": "seconds"
+		},
 		"extra_info": {
 			"metric_type": "map",
 			"description": "Unique operator metrics"
+		},
+		"finalize_timing": {
+			"metric_type": "double",
+			"description": "Time spent in the operator's finalize phase (PrepareFinalize, Finalize and the tasks it schedules); part of timing",
+			"unit": "seconds"
 		},
 		"intermediate_rows": {
 			"metric_type": "uint64",
@@ -150,6 +160,16 @@
 			"metric_type": "uint64",
 			"description": "Number of rows scanned by the operator",
 			"unit": "rows"
+		},
+		"sink_timing": {
+			"metric_type": "double",
+			"description": "Time spent in the operator as its pipeline's sink (Sink, Combine); part of timing",
+			"unit": "seconds"
+		},
+		"source_timing": {
+			"metric_type": "double",
+			"description": "Time spent in the operator as its pipeline's source (GetData); part of timing",
+			"unit": "seconds"
 		},
 		"timing": {
 			"metric_type": "double",

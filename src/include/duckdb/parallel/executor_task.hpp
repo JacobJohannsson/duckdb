@@ -22,6 +22,8 @@ class ExecutorTask : public Task {
 public:
 	ExecutorTask(Executor &executor, shared_ptr<Event> event);
 	ExecutorTask(ClientContext &context, shared_ptr<Event> event, const PhysicalOperator &op);
+	//! A task of the given executor whose time is profiled as the finalize time of op
+	ExecutorTask(Executor &executor, shared_ptr<Event> event, const PhysicalOperator &op);
 	~ExecutorTask() override;
 
 public:

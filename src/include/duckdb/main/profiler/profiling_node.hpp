@@ -13,6 +13,12 @@
 
 namespace duckdb {
 
+//! The role an operator plays in the profiled call: the source of its pipeline (GetData), one of its intermediate
+//! operators (Execute), its sink (Sink, Combine), or a step of the sink's finalize phase (PrepareFinalize, Finalize and
+//! the tasks they schedule). An operator plays different roles in different pipelines (a hash join is the sink of its
+//! build pipeline and an operator of its probe pipeline), so its time by role is its time by pipeline.
+enum class OperatorProfilerRole : uint8_t { SOURCE, EXECUTE, SINK, FINALIZE };
+
 struct OperatorMetrics {
 	explicit OperatorMetrics() {
 		ResetMetrics();
@@ -21,7 +27,12 @@ struct OperatorMetrics {
 	string name;
 	PhysicalOperatorType operator_type;
 
+	//! All the time spent in the operator: the sum of the four times by role below
 	double time;
+	double source_time;
+	double execute_time;
+	double sink_time;
+	double finalize_time;
 	idx_t elements_returned;
 	idx_t intermediate_size_bytes;
 	idx_t system_peak_buffer_manager_memory;
@@ -33,6 +44,10 @@ struct OperatorMetrics {
 	profiler_metrics_t GetMetrics(const GatheredMetrics &info) const;
 	void ResetMetrics() {
 		time = 0;
+		source_time = 0;
+		execute_time = 0;
+		sink_time = 0;
+		finalize_time = 0;
 		elements_returned = 0;
 		intermediate_size_bytes = 0;
 		system_peak_buffer_manager_memory = 0;
@@ -52,7 +67,8 @@ struct OperatorMetrics {
 	const InsertionOrderPreservingMap<string> &GetExtraInfo() const {
 		return extra_info;
 	}
-	void GatherMetrics(ClientContext &context, double elapsed_time, optional_ptr<DataChunk> chunk);
+	void GatherMetrics(ClientContext &context, double elapsed_time, optional_ptr<DataChunk> chunk,
+	                   OperatorProfilerRole role = OperatorProfilerRole::EXECUTE);
 	void Merge(const OperatorMetrics &other);
 	void Accumulate(const OperatorMetrics &other);
 
@@ -72,7 +88,8 @@ public:
 	}
 
 public:
-	DUCKDB_API void StartOperator(optional_ptr<const PhysicalOperator> phys_op);
+	DUCKDB_API void StartOperator(optional_ptr<const PhysicalOperator> phys_op,
+	                              OperatorProfilerRole role = OperatorProfilerRole::EXECUTE);
 	DUCKDB_API void EndOperator(optional_ptr<DataChunk> chunk);
 	DUCKDB_API void FinishSource(GlobalSourceState &gstate, LocalSourceState &lstate);
 	DUCKDB_API void FinishSource(const PhysicalOperator &phys_op, GlobalSourceState &gstate, LocalSourceState &lstate);
@@ -92,6 +109,8 @@ private:
 	Profiler op;
 	//! The stack of Physical Operators that are currently active
 	optional_ptr<const PhysicalOperator> active_operator;
+	//! The role of the active operator in the call being timed
+	OperatorProfilerRole active_role = OperatorProfilerRole::EXECUTE;
 	//! A mapping of physical operators to profiled operator information.
 	reference_map_t<const PhysicalOperator, OperatorMetrics> operator_metrics;
 };

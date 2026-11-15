@@ -547,7 +547,7 @@ class HashAggregateFinalizeTask : public ExecutorTask {
 public:
 	HashAggregateFinalizeTask(ClientContext &context, Pipeline &pipeline, shared_ptr<Event> event_p,
 	                          const PhysicalHashAggregate &op, HashAggregateGlobalSinkState &state_p)
-	    : ExecutorTask(pipeline.executor, std::move(event_p)), context(context), pipeline(pipeline), op(op),
+	    : ExecutorTask(pipeline.executor, std::move(event_p), op), context(context), pipeline(pipeline), op(op),
 	      gstate(state_p) {
 	}
 
@@ -611,7 +611,8 @@ class HashAggregateDistinctFinalizeTask : public ExecutorTask {
 public:
 	HashAggregateDistinctFinalizeTask(Pipeline &pipeline, shared_ptr<Event> event_p, const PhysicalHashAggregate &op,
 	                                  HashAggregateGlobalSinkState &state_p)
-	    : ExecutorTask(pipeline.executor, std::move(event_p)), pipeline(pipeline), op(op), gstate(state_p) {
+	    : ExecutorTask(pipeline.executor, std::move(event_p), op), pipeline(pipeline), op(op),
+	      gstate(state_p) {
 	}
 
 public:

@@ -1,4 +1,6 @@
 #include "duckdb/parallel/pipeline_finish_event.hpp"
+#include "duckdb/parallel/pipeline_tracer.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/parallel/interrupt.hpp"
 #include "duckdb/parallel/executor_task.hpp"
@@ -9,8 +11,9 @@ namespace duckdb {
 //! in a task to allow the Finalize call to block (e.g. for async I/O)
 class PipelineFinishTask : public ExecutorTask {
 public:
+	//! Profiled as the sink's finalize time (ExecutorTask::Execute)
 	explicit PipelineFinishTask(Pipeline &pipeline_p, shared_ptr<Event> event_p)
-	    : ExecutorTask(pipeline_p.executor, std::move(event_p)), pipeline(pipeline_p) {
+	    : ExecutorTask(pipeline_p.executor, std::move(event_p), *pipeline_p.GetSink()), pipeline(pipeline_p) {
 	}
 
 	Pipeline &pipeline;
@@ -75,15 +78,26 @@ private:
 };
 
 PipelineFinishEvent::PipelineFinishEvent(shared_ptr<Pipeline> pipeline_p) : BasePipelineEvent(std::move(pipeline_p)) {
+	if (pipeline->trace) {
+		pipeline->trace->has_finish_event = true;
+	}
 }
 
 void PipelineFinishEvent::Schedule() {
+	if (pipeline->trace) {
+		auto &tracer = TaskScheduler::GetScheduler(pipeline->GetClientContext()).GetTracer();
+		pipeline->trace->SetOnce(pipeline->trace->finalize_start_ns, tracer.Now());
+	}
 	vector<shared_ptr<Task>> tasks;
 	tasks.push_back(make_uniq<PipelineFinishTask>(*pipeline, shared_from_this()));
 	SetTasks(std::move(tasks));
 }
 
 void PipelineFinishEvent::FinishEvent() {
+	if (pipeline->trace) {
+		auto &tracer = TaskScheduler::GetScheduler(pipeline->GetClientContext()).GetTracer();
+		pipeline->trace->SetOnce(pipeline->trace->finalize_end_ns, tracer.Now());
+	}
 }
 
 } // namespace duckdb
