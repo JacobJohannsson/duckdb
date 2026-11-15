@@ -589,8 +589,9 @@ struct DbschedQueryTagSetting {
 struct DbschedSchedulerModeSetting {
 	using RETURN_TYPE = string;
 	static constexpr const char *Name = "dbsched_scheduler_mode";
-	static constexpr const char *Description = "Thread-assignment hook for the progress simulator: off, deferred "
-	                                           "(threads change pipeline only at ticks), or immediate.";
+	static constexpr const char *Description =
+	    "Thread-assignment hook for the progress simulator: off, deferred (threads change pipeline only at ticks), "
+	    "immediate, or solo (one pipeline at a time).";
 	static constexpr const char *InputType = "VARCHAR";
 	static constexpr bool IsDebug = false;
 	static constexpr bool IsDeprecated = false;

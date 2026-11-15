@@ -27,7 +27,11 @@ PipelineHookMode PipelineHook::ParseMode(const string &mode_p) {
 	if (mode_str == "immediate") {
 		return PipelineHookMode::IMMEDIATE;
 	}
-	throw InvalidInputException("Unknown dbsched_scheduler_mode '%s': expected off, deferred, or immediate", mode_p);
+	if (mode_str == "solo") {
+		return PipelineHookMode::SOLO;
+	}
+	throw InvalidInputException("Unknown dbsched_scheduler_mode '%s': expected off, deferred, immediate, or solo",
+	                            mode_p);
 }
 
 void PipelineHook::SetMode(PipelineHookMode new_mode) {
@@ -55,12 +59,12 @@ void PipelineHook::SetMode(PipelineHookMode new_mode) {
 				Detach(worker);
 			}
 		}
+		NotifyWork();
 	}
 	for (auto &task : to_schedule) {
 		auto &token = *task->token;
 		scheduler.ScheduleTask(token, std::move(task));
 	}
-	work_cv.notify_all();
 }
 
 optional_ptr<PipelineTraceEntry> PipelineHook::GetTraceEntry(Task &task) {
@@ -158,8 +162,8 @@ bool PipelineHook::TryEnqueue(shared_ptr<Task> &task) {
 		if (pipeline.current_step_tasks == 0) {
 			pipeline.current_step_tasks = 1;
 		}
+		NotifyWork();
 	}
-	work_cv.notify_all();
 	return true;
 }
 
@@ -183,9 +187,9 @@ void PipelineHook::TryEnqueue(vector<shared_ptr<Task>> &tasks) {
 		for (auto &task : tasks) {
 			pipeline.pending.push_back({std::move(task), now, finalize_stage, unblocked_by});
 		}
+		NotifyWork();
 	}
 	tasks.clear();
-	work_cv.notify_all();
 }
 
 idx_t PipelineHook::WorkerCount() const {
@@ -296,10 +300,30 @@ vector<PipelineHook::HookPipeline *> PipelineHook::GetCandidates() {
 	return result;
 }
 
+void PipelineHook::NotifyWork() {
+	work_generation++;
+	work_cv.notify_all();
+}
+
+bool PipelineHook::SoloAllows(const Worker &worker, const HookPipeline &target) const {
+	for (auto &entry : pipelines) {
+		auto &other = *entry.second;
+		if (&other == &target) {
+			continue;
+		}
+		idx_t own = worker.pipeline == &other ? 1 : 0;
+		if (other.attached > own) {
+			return false;
+		}
+	}
+	return true;
+}
+
 bool PipelineHook::AssignImmediate(Worker &worker) {
+	auto solo = GetMode() == PipelineHookMode::SOLO;
 	for (auto pipeline : GetCandidates()) {
 		// in immediate mode attached threads are busy ones, so attached counts the threads it is using
-		if (pipeline->attached < GetCap(*pipeline)) {
+		if (pipeline->attached < GetCap(*pipeline) && (!solo || SoloAllows(worker, *pipeline))) {
 			Attach(worker, *pipeline);
 			return true;
 		}
@@ -323,6 +347,9 @@ bool PipelineHook::TryGetTask(idx_t worker_idx, shared_ptr<Task> &task) {
 		if (!next && worker.pipeline) {
 			next = FindSinkFinalize(*worker.pipeline);
 		}
+		if (next && GetMode() == PipelineHookMode::SOLO && !SoloAllows(worker, *next)) {
+			next = nullptr;
+		}
 		if (next) {
 			if (worker.pipeline) {
 				Detach(worker);
@@ -330,14 +357,20 @@ bool PipelineHook::TryGetTask(idx_t worker_idx, shared_ptr<Task> &task) {
 			Attach(worker, *next);
 		}
 	}
-	if (worker.pipeline && worker.pipeline->pending.empty() && GetMode() == PipelineHookMode::IMMEDIATE) {
-		// immediate mode: a thread is released as soon as its pipeline has nothing pending
+	if (worker.pipeline && worker.pipeline->pending.empty() && ReleasesAtOnce()) {
+		// immediate and solo modes: a thread is released as soon as its pipeline has nothing pending
+		auto &released = *worker.pipeline;
 		Detach(worker);
+		if (released.attached == 0 && GetMode() == PipelineHookMode::SOLO) {
+			// the pipeline's turn is over: the waiting workers may take the next pipeline
+			NotifyWork();
+		}
 	}
-	if (!worker.pipeline && GetMode() == PipelineHookMode::IMMEDIATE) {
+	if (!worker.pipeline && ReleasesAtOnce()) {
 		AssignImmediate(worker);
 	}
 	if (!worker.pipeline || worker.pipeline->pending.empty()) {
+		worker.seen_generation = work_generation;
 		return false;
 	}
 	auto now = tracer.Now();
@@ -373,6 +406,7 @@ void PipelineHook::TaskDone(idx_t worker_idx) {
 	if (pipeline.removed) {
 		// its query is gone: release the thread, and the pipeline once no thread runs its tasks
 		Detach(worker);
+		NotifyWork();
 		if (pipeline.busy == 0 && pipeline.attached == 0) {
 			ErasePipeline(pipeline.entry.get());
 		}
@@ -386,7 +420,9 @@ bool PipelineHook::IsAttached(idx_t worker_idx) {
 
 void PipelineHook::WaitForWork(idx_t worker_idx, int64_t timeout_us) {
 	std::unique_lock<mutex> guard(lock);
-	work_cv.wait_for(guard, std::chrono::microseconds(timeout_us));
+	// not if work appeared since the worker last looked: it would sleep through it
+	auto seen = GetWorker(worker_idx).seen_generation;
+	work_cv.wait_for(guard, std::chrono::microseconds(timeout_us), [&]() { return work_generation != seen; });
 }
 
 void PipelineHook::Tick() {
@@ -436,10 +472,10 @@ void PipelineHook::Tick() {
 				}
 			}
 		}
-	}
-	// wake waiting workers only when the tick gave some of them a pipeline
-	if (assigned_any) {
-		work_cv.notify_all();
+		// wake waiting workers only when the tick gave some of them a pipeline
+		if (assigned_any) {
+			NotifyWork();
+		}
 	}
 }
 
@@ -476,8 +512,8 @@ void PipelineHook::RemoveQuery(QueryTraceEntry &query, vector<shared_ptr<Task>> 
 				ErasePipeline(entry.get());
 			}
 		}
+		NotifyWork();
 	}
-	work_cv.notify_all();
 }
 
 unordered_map<const PipelineTraceEntry *, PipelineHook::Attachment> PipelineHook::GetAttachments() {

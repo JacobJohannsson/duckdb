@@ -27,7 +27,7 @@ class TaskScheduler;
 struct PipelineTraceEntry;
 struct QueryTraceEntry;
 
-enum class PipelineHookMode : uint8_t { OFF, DEFERRED, IMMEDIATE };
+enum class PipelineHookMode : uint8_t { OFF, DEFERRED, IMMEDIATE, SOLO };
 
 //! One entry of the policy list: up to `cap` threads for a pipeline, in list order
 struct PipelineHookPolicyEntry {
@@ -50,7 +50,8 @@ struct PipelineHookPolicyEntry {
 //! policy list: each listed pipeline with pending tasks gets threads up to its cap, preferring the threads it had
 //! before. Threads left over go to pipelines the list does not name, first come, first served. In immediate mode a
 //! thread is released as soon as its pipeline has nothing pending and takes the next pipeline from the same list at
-//! once.
+//! once. Solo mode is immediate mode with one more rule: only one pipeline holds threads at a time, so every pipeline
+//! runs alone, on at most as many threads as it has tasks, the next only once the one before has nothing left to run.
 class PipelineHook {
 public:
 	PipelineHook(TaskScheduler &scheduler, PipelineTracer &tracer);
@@ -62,6 +63,11 @@ public:
 	}
 	bool IsActive() const {
 		return mode.load() != PipelineHookMode::OFF;
+	}
+	//! Whether a thread leaves its pipeline as soon as it has nothing pending, instead of at the next tick
+	bool ReleasesAtOnce() const {
+		auto current = mode.load();
+		return current == PipelineHookMode::IMMEDIATE || current == PipelineHookMode::SOLO;
 	}
 	static PipelineHookMode ParseMode(const string &mode);
 
@@ -156,6 +162,8 @@ private:
 		int64_t state_since_ns = -1;
 		//! The pipeline it was attached to before the last tick, preferred when it is reassigned
 		HookPipeline *previous = nullptr;
+		//! The work generation when it last looked for a task and found none
+		idx_t seen_generation = 0;
 		bool busy = false;
 		//! The task it is running, for the task log: its type as a code (task_type_names)
 		uint16_t task_type = 0;
@@ -188,6 +196,10 @@ private:
 	void Attach(Worker &worker, HookPipeline &pipeline);
 	void Detach(Worker &worker);
 	bool AssignImmediate(Worker &worker);
+	//! Solo mode: whether no pipeline other than `target` holds a thread other than `worker`
+	bool SoloAllows(const Worker &worker, const HookPipeline &target) const;
+	//! Wakes the waiting workers: there may be work for them
+	void NotifyWork();
 	Worker &GetWorker(idx_t worker_idx);
 	idx_t WorkerCount() const;
 	//! Moves a worker to the state its attachment and busy flag imply, accounting the time in its old state
@@ -201,6 +213,8 @@ private:
 
 	mutex lock;
 	std::condition_variable work_cv;
+	//! Counts the times work may have appeared, so that a worker does not sleep through one
+	idx_t work_generation = 0;
 	unordered_map<const PipelineTraceEntry *, unique_ptr<HookPipeline>> pipelines;
 	vector<Worker> workers;
 	vector<PipelineHookPolicyEntry> policy;
